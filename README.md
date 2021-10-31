@@ -15,12 +15,14 @@ Our team consisted of the following individuals:
 - Sarah Haley, slh54@drexel.edu
 - Nancy Melucci, njm99@drexel.edu
 
-## Requirements
+## Python Requirements
 - Python ≥ 3.8. 
 - Python modules, packages, and methods required: 
     - `pandas`
     - `matplotlib.pylot`
     - `numpy`
+
+## R Requirements
 
 ## How to Execute Code: 
 
