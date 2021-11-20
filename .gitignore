@@ -3,3 +3,5 @@
 
 # Jupyter Notebook
 *.ipynb_checkpoints
+.ipynb_checkpoints/Icon
+.ipynb_checkpoints/Icon
