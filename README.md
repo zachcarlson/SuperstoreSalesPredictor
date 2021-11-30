@@ -33,8 +33,12 @@ Our team consisted of the following individuals:
 
 ## R Requirements
 - R libraries:
-    - `tidyverse`
-
+    - `tidyverse` #Tidyverse v3.6.3
+    - `lubridate`
+    - `ggplot2`
+    - `knitr`
+    - `kableExtra`
+    - `zoo`
 
 ## How to Execute Code: 
 

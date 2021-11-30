@@ -1,0 +1,180 @@
+---
+title: "Superstore Sales Predictor"
+author: 
+- Sarah Haley, slh54@drexel.edu 
+- Zach Carlson, zc378@drexel.edu
+- Nancy Melucci, njm99@drexel.edu
+date: "November 14, 2021"
+output: 
+  prettydoc::html_pretty:
+    theme: Architect
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(root.dir= '/tmp')
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## Libraries
+```{r libraries used}
+library(tidyverse) #Tidyverse v3.6.3
+library(lubridate)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(zoo)
+
+```
+
+## Import and View the Data 
+
+```{r sales}
+
+sales_raw <- read.csv("./data/superstore_dataset2011-2015.csv", header = TRUE, sep = ",")
+
+sales_raw <- mutate_at(sales_raw, vars("Order.Date","Ship.Date"),funs(dmy))
+```
+
+The dates need to be converted using the `lubridate` library. The two date columns are now correctly reading as `<date>`.
+
+```{r }
+sales_raw %>%
+  select(Order.Date, Ship.Date) %>%
+  head(., 6) 
+```
+
+#### Initial Observations 
+Using the dpylr package's glimpse function, we see there are  
+
+- `51,290` instances with `24` features
+- lubridate dates are now in `YYYY-MM-DD` format 
+- most features are factored but there are also int and nums where sensible:
+  + Quantity is in integers
+  + Sales is num (floating point)
+  + For ease of analysis, we will assume all sales are in USD
+  + Sales column rowwise represents the total amount by Quantity(1-n)
+  
+For the superstore data we want to know a number of things that time series can help us understand. Things such as:  
+
+- Are Sales & Profits increasing over time? 
+- What categories of sales are most profitable over time?
+- What region has the most sales and are the most profitable over time?
+- Predicted growth rates and declines will help us establish which markets, regions, and products we should be investing in for best profitability. 
+
+We will start with some basic EDA and making a few simple plots to investigate our data and build from there. We are also going to setup a few preliminary dataframes to help with the work. 
+
+#### Exploratory Data Analysis
+
+```{r}
+dplyr::glimpse(sales_raw, width = getOption("width"))
+```
+
+Right away we can see there are a lot of NA values for Postal.Code so we will drop that column; we will not be using it for this project. 
+
+```{r}
+sales <- subset(sales_raw, select = -c(Postal.Code))
+```
+
+Additionally, we will also add a few columns to the data set to make it easier for analysis throughout the project. A year column, a YearMonth column, a monthabbr column, and a month date object. Note some of these are not considered actual date parts but can be wrangled to look like dates.   
+
+```{r}
+sales <- sales %>%
+  mutate(
+    YearMonth = format(Order.Date, "%Y-%m")
+  ) #character
+sales <- sales %>% 
+  mutate(
+    year = year(Order.Date), monthAbbr = month(Order.Date, label = TRUE)
+  ) #Ordinal
+
+sales$month <- as.Date(cut(sales$Order.Date, breaks = "month")) #Date
+
+```
+
+A quick look at the new columns:
+
+```{r}
+sales %>% 
+  select(YearMonth, year, month, monthAbbr) %>%
+  tail(., n = 10)
+```
+
+Let's start by looking at monthly sales trends, aggregating the `Quantity` column by month.
+
+```{r}
+monthly_sales_quantity <- sales %>% 
+  group_by(year, monthAbbr) %>%
+  summarise(total.qty = sum(Quantity))
+
+head(monthly_sales_quantity, 24)
+```
+
+And used to visualize, we get:
+
+```{r}
+monthly_sales_quantity %>%
+  ggplot(aes(x = monthAbbr, y = total.qty, group = year)) +
+  geom_area(aes(fill=year), position = "stack") +
+  labs(title = "Volume of Sales by Month", x= "", y ="Total Sales Qty") +
+  scale_y_continuous() +
+  theme(legend.position = "bottom")
+```
+
+There is certainly a season trend in terms of quantity sold with a slow growth throughout the year capped with three peaks, and a bulk of sales happening in the last quarter of the year. There is a small peak between April through to July, another between July and October, and the third (and largest) trending from October to the end of December.   
+
+We will continue to look at total quantity (volume of sales) and total sales (revenue) over the course of this project. Since the per sale dollar amount already reflects the unit by price * quantity, the charts below are representing the `volume` of sales per month by individual days' (points) `revenue`. Each point represents a Sales line item. 
+
+```{r}
+ggplot(sales, aes(monthAbbr, Sales)) +
+  #geom_point(color= "steelblue")
+geom_jitter(alpha =0.5, aes(color=year), position = position_jitter(width = .2))+
+  labs(x = "Month",
+       y = " Sales", 
+       title = "Annual SuperStore Sales by Month") +
+  geom_line()+
+  #stat_summary(fun.y = sum, geom = "bar")+
+  #geom_bar(stat = "identity") +
+  facet_wrap(~year(month),ncol = 2) +
+  theme_bw() +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5,
+                                   hjust = 1))  
+
+```
+
+Looking at this panel, we see we have a number of outliers in the data and that most of the sales amounts per sale are below $5000 (and often much less than that). Also, it is apparent that there was less variance in the 2012 month to month data points than from the other years. Finally, outside of the obvious connection between sales and quantity sold, a closer look at the relationship between sales and profits can reveal more details. 
+
+Here, we plot the Sales (volume) and Profit. We will need to reshape the data first, using the tidyr package and grouping the variables into one column. 
+```{r}
+monthly_sales_profit <- sales %>%
+  group_by(month) %>% 
+  summarise_at(c("Sales", "Profit"), sum)
+
+
+MSP <-monthly_sales_profit %>% 
+  gather(key = "variable", value = "values", -month)
+
+tail(MSP)
+  
+
+```
+Now to plot the multiple line plots to look at the relationship between the "Sales" (volume), and "Profit" coloumns by year by month. 
+
+```{r}
+options(scipen=999)# prevents scientific numbering on axis
+ggplot(MSP, aes(x = month, y = values)) +
+  geom_line(aes(color = variable), size = 1)+
+  labs(title = "Monthly Totals of Sales and Profits by Year", subtitle = "Y axis scaled by log 10", y=NULL)+
+  scale_color_manual(values = c("#96be25", "#2596be"))+
+  theme_minimal()+
+  scale_y_log10(breaks = scales::log_breaks(10))
+```
+
+Using a `log10 scale` on the y axis helps us see what is happening with the data. While not in moving in complete tandem, the growth of total sales does have an impact on total profits, but total profits appear to remain relatively low in relation - never once breaking the \$50,000 mark despite total sales growing past $500,000\. 
+
+So we have our answer to our first question - sales (revenues) and profits are growing in raw values but the rate of change for profits appear vastly slower to those of total revenue. Let's have a quick look at the growth rates between the two. 
+
+
+
+
