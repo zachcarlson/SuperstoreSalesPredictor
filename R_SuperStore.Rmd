@@ -229,7 +229,18 @@ ggplot(monthly_report_by_category, aes(x= YearMonth, y=MoM, fill=Category)) +
   geom_col(position = "dodge")
 ```
 
+```{r}
+MSP_Sales <- MSP %>% filter(variable=="Profit") 
+ggplot(MSP_Sales) +
+  geom_col(aes(x = month, y = pct_change, fill = pct_change > 0)) +
+  scale_color_manual(values = c("#96be25", "#2596be"))+
+  labs(title = "Monthly Percent Change in Profits by Year", y=NULL)+
+  theme_classic()
+#+
+  #geom_text(aes(x = month, y = pct_change, label = paste0(round(pct_change, 2),"%")), size = 2, vjust= -0.5)
 
+  
+```
 
 
 

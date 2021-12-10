@@ -16,16 +16,32 @@ knitr::opts_chunk$set(root.dir= '/tmp')
 knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 ```
 
-## Libraries
+#### Libraries
 ```{r libraries used}
 library(tidyverse) #Tidyverse v3.6.3
 library(lubridate)
 library(ggplot2)
+library(ggfortify)
 library(knitr)
 library(kableExtra)
 library(zoo)
-
+library(forecast)
 ```
+
+
+### ARIMA in R and Time Series Forecasting
+
+For this project, we will be using the Autoregressive Integrated Moving Average (ARIMA) forecasting model which in turn is based on the Box-Jenkins Methodology. This is comprised of three major steps:
+
+1) Conditioning the data and selecting a model (from chapter 8 in Data Science and Big Data Analytics)
+  -identify and account for any trends or seasonality in the time series
+  -examine the remaining time series for any trends or seasonality in the time series
+2) Estimate the model parameters
+3) Assess the model and return to step one if necessary
+
+*Time series data* is made up of four possible components: Trend [T], Cycle [C], Seasonality [S], and Random[R]. To that end, we will employ a few libraries that were developed to deal with these particular issues in Time Series data.
+
+So to begin, we will start looking at the data and getting a sense of its shape and possibilities. 
 
 ## Import and View the Data 
 
@@ -53,7 +69,7 @@ Using the dpylr package's glimpse function, we see there are
   + Quantity is in integers
   + Sales is num (floating point)
   + For ease of analysis, we will assume all sales are in USD
-  + Sales column rowwise represents the total amount by Quantity(1-n)
+  + Sales column row-wise represents the total amount by Quantity(1-n)
   
 For the superstore data we want to know a number of things that time series can help us understand. Things such as:  
 
@@ -61,8 +77,6 @@ For the superstore data we want to know a number of things that time series can 
 - What categories of sales are most profitable over time?
 - What region has the most sales and are the most profitable over time?
 - Predicted growth rates and declines will help us establish which markets, regions, and products we should be investing in for best profitability. 
-
-We will start with some basic EDA and making a few simple plots to investigate our data and build from there. We are also going to setup a few preliminary dataframes to help with the work. 
 
 #### Exploratory Data Analysis
 
@@ -100,6 +114,45 @@ sales %>%
   tail(., n = 10)
 ```
 
+And here we will look at a few 30,000ft summary statistics around the factors affecting Revenue (Sales, Quantity, Discount Rates, Shipping Costs, and Profits) over the four year lifecycle:
+```{r}
+kable(sales %>%
+        select(Sales, Quantity, Discount, Shipping.Cost, Profit) %>%
+        summary()  
+  , format = "html", digits = 2) %>% 
+  kable_styling(bootstrap_options= c("striped"), full_width = F, font_size = 14)
+
+```
+
+`Discount` is in a percentage format already, showing an average at about 14% and the average quantity per sale is relatively low with an IQR of 2-5 and a median value of 3 per sale item. We will look more closely at sales volume trends shortly. 
+
+Dropping `Quantity` and `Discount` data, we can see the main revenue factors in side-by-side box plots. Total revenue, or the Sales plot, is the highest, as it should be, and Profit and Shipping Cost are subsets of that number. Profit is also quite large in the plot but Shipping Costs are not far behind, leading to some questions around efficiency for upper management to contemplate further. Additionally, there are a large number of outliers in the data and it is highly positively skewed, hence the addition of log10 on the y scale.      
+
+```{r}
+options(scipen=999)# prevents scientific numbering on axis
+sales %>%
+  select(Sales, Shipping.Cost, Profit) %>%
+  pivot_longer(cols = everything()) %>%
+  ggplot(aes(x= name, y = value, fill=name)) +
+    geom_boxplot()+
+    xlab("Factors in Revenue") +
+    scale_y_log10("Values in $ (Log 10 scale)")  +
+  ggtitle("Boxplot of Profit, Sales, and Shipping Costs", subtitle = "Y scale in Log 10 Scale")+
+    scale_fill_brewer(palette = "Paired")+
+    theme_bw()
+
+```
+
+Looking a little more closely at Sales by year: 
+```{r}
+kable(sales %>% 
+  group_by(year) %>%
+  summarise(total_sales = sum(Sales),  mean_sales = mean(Sales), median_sales = median(Sales), max_sales = max(Sales), min_sales = min(Sales)), format = "html", digits = 2) %>% 
+  kable_styling(full_width = F, font_size = 12)
+
+```
+
+Total sales have grown every year while average sales have not. It looks like a lot of small sales make up the vast majority of the revenue for this company. Quantity sold, (our sales volume), should help us understand if this supposition is true and help us determine if there are visible seasonal trends. 
 Let's start by looking at monthly sales trends, aggregating the `Quantity` column by month.
 
 ```{r}
@@ -107,29 +160,30 @@ monthly_sales_quantity <- sales %>%
   group_by(year, monthAbbr) %>%
   summarise(total.qty = sum(Quantity))
 
-head(monthly_sales_quantity, 24)
+tail(monthly_sales_quantity, 24)
 ```
 
 And used to visualize, we get:
 
-```{r}
+```{r fig.width = 10}
 monthly_sales_quantity %>%
   ggplot(aes(x = monthAbbr, y = total.qty, group = year)) +
   geom_area(aes(fill=year), position = "stack") +
   labs(title = "Volume of Sales by Month", x= "", y ="Total Sales Qty") +
   scale_y_continuous() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "top")+
+  theme_minimal()
 ```
 
-There is certainly a season trend in terms of quantity sold with a slow growth throughout the year capped with three peaks, and a bulk of sales happening in the last quarter of the year. There is a small peak between April through to July, another between July and October, and the third (and largest) trending from October to the end of December.   
+There are obvious seasonal trends in terms of quantity sold with slow and steady growth throughout the year capped with three peaks, and a bulk of sales happening in the last quarter of the year. There is a small peak between April through to July, another between July and October, and the third (and largest) trending from October to the end of December.   
 
-We will continue to look at total quantity (volume of sales) and total sales (revenue) over the course of this project. Since the per sale dollar amount already reflects the unit by price * quantity, the charts below are representing the `volume` of sales per month by individual days' (points) `revenue`. Each point represents a Sales line item. 
+We will continue to look at total quantity (volume of sales) and total sales (revenue) over the course of this project. Since the per sale dollar amount already reflects the unit by price * quantity, the charts below are representing the `volume` of sales per month by individual days' (points) `revenue`. Each point represents a Sales line item multiplied the quantity sold. 
 
 ```{r}
 ggplot(sales, aes(monthAbbr, Sales)) +
   #geom_point(color= "steelblue")
 geom_jitter(alpha =0.5, aes(color=year), position = position_jitter(width = .2))+
-  labs(x = "Month",
+  labs(x = "Daily Sales by Month",
        y = " Sales", 
        title = "Annual SuperStore Sales by Month") +
   geom_line()+
@@ -145,7 +199,20 @@ geom_jitter(alpha =0.5, aes(color=year), position = position_jitter(width = .2))
 
 Looking at this panel, we see we have a number of outliers in the data and that most of the sales amounts per sale are below $5000 (and often much less than that). Also, it is apparent that there was less variance in the 2012 month to month data points than from the other years. Finally, outside of the obvious connection between sales and quantity sold, a closer look at the relationship between sales and profits can reveal more details. 
 
-Here, we plot the Sales (volume) and Profit. We will need to reshape the data first, using the tidyr package and grouping the variables into one column. 
+Let's look at a few of the ouliers to see if we can determine what is causing them. 
+
+```{r}
+kable(sales %>% 
+  group_by(year) %>% arrange(year) %>%
+  select(., c(Order.Date, Customer.Name, Segment, Product.Name, Sales,   Quantity, Discount, Profit)) %>%
+    filter(Sales == max(Sales)),format = "html", digits = 2, table.attr = "style='width:40%;'") %>% 
+  kable_styling(full_width = F, font_size = 12)
+
+```
+The above appear to be genuine sales, although they are certainly much larger than the average sales and very rare in the overall dataset. Also, they appear to be strangely segmented - I have yet to meet someone who buys 6 video conferencing units for their `Home Office` and the Canon sales are each attributed to a different segment for the same product. 
+
+#### Sales and Profit Relationships
+Now to plot the multiple line plots to look at the relationship between the "Sales" and "Profit" columns by year by month.
 ```{r}
 monthly_sales_profit <- sales %>%
   group_by(month) %>% 
@@ -155,12 +222,21 @@ monthly_sales_profit <- sales %>%
 MSP <-monthly_sales_profit %>% 
   gather(key = "variable", value = "values", -month)
 
-tail(MSP)
+MSP
   
 
 ```
-Now to plot the multiple line plots to look at the relationship between the "Sales" (volume), and "Profit" coloumns by year by month. 
 
+```{r}
+options(scipen=999)# prevents scientific numbering on axis
+ggplot(MSP, aes(x = month, y = values)) +
+  geom_line(aes(color = variable), size = 1)+
+  labs(title = "Monthly Totals of Sales and Profits by Year", y=NULL)+
+  scale_color_manual(values = c("#96be25", "#2596be"))+
+  theme_minimal()
+```
+
+It is really hard to see if anything is changing at all with profits. So we will plot again using a log 10 scale on the Y-axis. 
 ```{r}
 options(scipen=999)# prevents scientific numbering on axis
 ggplot(MSP, aes(x = month, y = values)) +
@@ -171,10 +247,197 @@ ggplot(MSP, aes(x = month, y = values)) +
   scale_y_log10(breaks = scales::log_breaks(10))
 ```
 
-Using a `log10 scale` on the y axis helps us see what is happening with the data. While not in moving in complete tandem, the growth of total sales does have an impact on total profits, but total profits appear to remain relatively low in relation - never once breaking the \$50,000 mark despite total sales growing past $500,000\. 
+Using a `log10 scale` on the y axis helps us see what is happening with the data. While not moving in complete tandem, the growth of total sales does have an impact on total profits and we appear to have the answer to our first question; sales and profits are increasing, but total profits appear to remain relatively low in relation - never once breaking the \$50,000 mark despite total sales growing past $500,000\. 
 
-So we have our answer to our first question - sales (revenues) and profits are growing in raw values but the rate of change for profits appear vastly slower to those of total revenue. Let's have a quick look at the growth rates between the two. 
+Let's see how correlated the two values are: 
+```{r}
+cor(sales$Sales, sales$Profit)
+```
+
+```{r}
+ggplot(sales, aes(Sales, Profit)) +
+  geom_point()+
+  geom_smooth(method = "lm") +
+  theme_minimal()
+```
+
+and looking at a scatter plot is not very helpful. The raw values of the data show a poor alignment between the two values. 
+
+Let's standardize for easier readability. To do that we will first look at the percentage change month over month for Sales and Profits. 
+
+```{r}
+MSP<-MSP %>%
+  mutate(pct_change = (values/lag(values)-1)*100)
+
+tail(MSP, 5)
+```
+
+Charting the data we get:
+
+```{r}
+options(scipen=999)# prevents scientific numbering on axis
+ggplot(MSP, aes(x = month, y = pct_change)) +
+  geom_line(aes(color = variable), size = 1)+
+  labs(title = "Monthly % Change of Sales and Profits by Year", y=NULL)+
+  scale_color_manual(values = c("#96be25", "#2596be"))+
+  theme_minimal()
+```
+
+This makes things a little clearer and shows that sales and profits are both trending at similar rates, with profits being much less stable and more variable than sales. 
+
+### Rolling Averages
+Further standardizing, we will next look a the rolling means:
+
+```{r}
+daily_sales <- sales %>%
+  select(Order.Date, Sales, Quantity, Profit, Shipping.Cost) %>%
+  group_by(Order.Date) %>% 
+  summarise(
+          daSales = sum(Sales),
+         daProfits = sum(Profit), 
+         daShipping = sum(Shipping.Cost))
+rolling <-daily_sales %>%
+    mutate(sales_01da = rollmean(daSales, k = 1, fill = NA),
+         sales_07da = rollmean(daSales, k = 7, fill = NA),
+         sales_30da = rollmean(daSales, k = 30, fill = NA),
+         sales_360da = rollmean(daSales, k = 365, fill = NA), 
+         profits_01da = rollmean(daProfits, k = 1, fill = NA),
+         profits_07da = rollmean(daProfits, k = 7, fill = NA),
+         profits_30da = rollmean(daProfits, k = 30, fill = NA),
+         profits_360da = rollmean(daProfits, k = 365, fill = NA)) 
+
+
+rolling <- subset(rolling, select = -c(daSales, daProfits, daShipping))
+rolling
+```
+
+```{r width = 15}
+rs <- ggplot(rolling, aes(x = Order.Date, y = sales_01da)) +
+  geom_line(color="#2596be") +
+  geom_line(aes(y = sales_07da), color = "dark blue", size = 0.75)+
+  labs (x = "Order Date", y = "Daily Sales", title = "Daily Sales with 7 day Rolling Average") +
+  theme_minimal()
+
+rs
+```
+
+```{r width = 15}
+
+sp7 <- ggplot(rolling, aes(x = Order.Date)) +
+  geom_line(aes(y = profits_07da), color="#96be25") +
+  geom_line(aes(y = sales_07da), color = "#2596be", size = 0.75)+
+  labs (x = "Order Date", y = "Daily Sales", title = "Rolling 7-day Averages of Sales and Profit")
+
+sp7
+
+```
+
+```{r}
+ggplot(rolling, aes(x = Order.Date))
+```
+
+
+### ARIMA in R and Time Series Forecasting
+
+Now we come to the heart of the matter, using the Box-Jenkins Methodology,with the Autoregressive Integrated Moving Average model(ARIMA). This is comprised of three major steps:
+
+So far, our data, appears to have strong seasonality trends, although the magnitude is hard to tell. It may also have cyclicity but that is also hard to tell with the current graphs. To that end we will employ a few libraries that were developed to deal with these particuar issues in Time Series data. 
+
+In R this is done by converting the information to a timeseries object and then use the forecast or other similar libraries to perform some decomposition on the data. Decomposition is a process of seperating out different time series peices, rendering the data in a more "predictable" format. 
+
+For the ARIMA model we must also ensure the data is in a `stationary` format.
+- the mean of Y(t) is a constant for all values of t
+- the variance of Y(t) is finite
+- the covariance of Y(t) and Y(t + h) depends only on the value of h = 0,1,2,...for all of t. 
+
+#### Stationary Data Test
+
+
+#### Using the Time Series Object in R
+
+Converting the monthly sales information into a ts (time series) object in R, we can use its native library and the stats package to decompose the monthly sales data to see if we are on the right track. This will also confirm which parts of the data are due to randomness, which is something we cannot gleen from the earlier charts. 
+
+I am going to plot the STL (seasonal and trend decomposition using Loess) for `Sales` and then we will look at some of the other factors seperately. 
+```{r}
+monthly_revenue_factors <- sales %>% 
+  group_by(month) %>%
+  summarise(total.sales = sum(Sales), total.profit = sum(Profit), total.shipping = sum(Shipping.Cost))
+
+monthly_ts <-ts(monthly_revenue_factors[,2:4], start = 2011, end = 2014, freq = 12)
+
+
+monthly_sales <- sales %>% 
+   group_by(month) %>%
+   summarise(total.sales = sum(Sales)) 
+
+sales_ts <- ts(monthly_sales[,2], start = 2011, end = 2014, frequency = 12)
+
+sales_ts %>%
+  stl( s.window = "period") %>%
+  autoplot() +
+  theme_bw()
+```
+
+With everything split out, it is possible to see the trend and seasonal data very clearly. Sales are growing and seasonality cannot be denied. The `Random` or reaminder data is also often used for prediction as it can contain underpinning structure within the 'noise' letting us know whether or not we have achieved our goals with the data. 
+
+Since we know there is seasonality in the data, it means the series is not stationary and for the ARIMA models of prediction, we will need to do a litle work. 
 
 
 
+Another chart that is a part of the Box Jenkins Methodology is the ACF or Autocorrelation Function. This function provides an autocorrelation with previous lags or time periods of a dataset with itself. The ACF will peak around seasonal lags or at the average cycle length. 
+
+Below is an ACF plot on just the monthly sales data. The dashed lines are there to show when a correlation is significantly above or below zero. The lags at 1 and 3 and 12 show that the data is likley not happening by random chance. This is data we can use to build a forcasting model. 
+```{r}
+
+ggAcf(sales_ts) +
+  theme_minimal()
+```
+
+Here, we will start with some basic predictions of the data. 
+```{r}
+library(caret)
+# training and test data
+set.seed(42)
+
+index = createDataPartition(sales$Sales, p = 0.70, list = FALSE)
+train = sales[index, ]
+test = sales[-index, ]
+```
+
+we are going to try out the 
+```{r}
+nf_sales <- naive(sales_ts, h = 4)
+
+autoplot(nf_sales) +
+  theme_minimal()
+```
+
+```{r}
+summary(nf_sales)
+```
+
+
+We added `Shipping Cost` back into the equation as well, to look at it in relationship to to the sales and profits side of the equation, as it is a variable of interest. 
+
+```{r}
+autoplot(monthly_ts) + #without facets 
+ theme_minimal()
+  
+
+```
+
+Here we see that the sales appears multiplicative in nature, but with the scale being so narrow and small in comparison for profits and shipping, it is harder to tell. Placing this in a facet could help. 
+
+```{r}
+autoplot(monthly_ts, facets = TRUE) + #without facets 
+ theme_minimal()
+  
+```
+
+
+```{r}
+monthly_ts_stl <-stl(sales_ts, s.window = "period")
+
+plot(monthly_ts_stl)
+```
 
