@@ -11,6 +11,7 @@ This repository was created for the INFO 659 course at Drexel University, Introd
 - `Folder /data` - Contains all data files
     - `superstore_dataset2011-2015.csv` - Raw sales data (source in **Project Overview**)
 - `Folder /documents` - Cotains all miscellaneous documents
+- `Project_Summary.docx` - Summary report of project made for class.
 
 ## Reason for Project:
 
