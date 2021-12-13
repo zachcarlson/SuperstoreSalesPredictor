@@ -1,0 +1,257 @@
+---
+title: "Superstore Sales Predictor"
+author: 
+- Sarah Haley, slh54@drexel.edu 
+- Zach Carlson, zc378@drexel.edu
+- Nancy Melucci, njm99@drexel.edu
+date: "November 14, 2021"
+output: 
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(root.dir= '/tmp')
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+```
+
+## Libraries
+```{r libraries used}
+library(tidyverse) #Tidyverse v3.6.3
+library(lubridate)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(zoo)
+```
+
+## Import and View the Data 
+```{r sales}
+
+sales_raw <- read.csv("./data/superstore_dataset2011-2015.csv", header = TRUE, sep = ",")
+
+sales_raw <- mutate_at(sales_raw, vars("Order.Date","Ship.Date"),funs(dmy))
+```
+
+The dates need to be converted using the `lubridate` library. The two date columns are now correctly reading as `<date>`.
+
+```{r }
+sales_raw %>%
+  select(Order.Date, Ship.Date) %>%
+  head(., 6) 
+```
+
+#### Initial Observations 
+Using the dpylr package's glimpse function, we see there are  
+
+- `51,290` instances with `24` features
+- lubridate dates are now in `YYYY-MM-DD` format 
+- most features are factored but there are also int and nums where sensible:
+  + Quantity is in integers
+  + Sales is num (floating point)
+  + For ease of analysis, we will assume all sales are in USD
+  
+For the superstore data we want to know a number of things that time series can help us understand. Things such as:  
+
+- Are Sales & Profits increasing over time? 
+- What categories of sales are most profitable over time?
+- What region has the most sales and are the most profitable over time?
+- Predicted growth rates and declines will help us establish which markets, regions, and products we should be investing in for best profitability. 
+- How long between when an order is made and when it is shipped? 
+
+We will start with some basic EDA and making a few simple plots to investigate our data and build from there. We are also going to setup a few preliminary dataframes to help with the work. 
+
+#### Exploratory Data Analysis
+
+```{r}
+dplyr::glimpse(sales_raw, width = getOption("width"))
+```
+
+Right away we can see there are a lot of NA values for Postal.Code so we will drop that column; we will not be using it for this project. 
+
+```{r}
+sales <- subset(sales_raw, select = -c(Postal.Code))
+```
+
+Additionally, we will also add a few columns to the data set to make it easier for analysis throughout the project. A year column, a YearMonth column, a monthabbr column, and a month date object. Note some of these are not considered actual date parts but can be wrangled to look like dates.   
+
+```{r}
+sales <- sales %>%
+  mutate(
+    YearMonth = format(Order.Date, "%Y-%m")
+  ) #character
+sales <- sales %>% 
+  mutate(
+    year = year(Order.Date), monthAbbr = month(Order.Date, label = TRUE)
+  ) #Ordinal
+
+sales$month <- as.Date(cut(sales$Order.Date, breaks = "month")) #Date
+
+```
+
+A quick look at the new columns:
+
+```{r}
+sales %>% 
+  select(YearMonth, year, month, monthAbbr) %>%
+  tail(., n = 10)
+```
+
+Testing out our new months data:
+
+
+
+While testing the annual sales by year data using the new year column, it looks like we have have some outliers in the data. Something we will discuss more as we shape the data for time series work. 
+
+```{r }
+ggplot(sales, aes(x = year, y = Sales)) +
+  geom_jitter(alpha =0.5, aes(color=year), position = position_jitter(width = .2))
+
+```
+
+Zooming in on the data, we see that the propensity of transactions happen within the + zero to five hundred dollar range for the majority of transactions. 
+
+```{r }
+ggplot(sales, aes(x = year, y = Sales)) +
+  coord_cartesian(ylim = c(0, 1000))+
+  geom_jitter(alpha =0.5, aes(color=year), position = position_jitter(width = .2)) 
+
+```
+
+#### Sales Summary Statistics
+```{r}
+kable(sales %>% 
+  group_by(year) %>%
+  summarise(total_sales = sum(Sales),  mean_sales = mean(Sales), median_sales = median(Sales), max_sales = max(Sales), min_sales = min(Sales)), format = "html", digits = 2) %>% 
+  kable_styling(full_width = F, font_size = 12)
+
+```
+
+```{r fig1, fig.height = 3, fig.width= 5, fig.align='center'}
+sales_info <- sales %>% count(year)
+ggplot(sales_info, aes(x = as.factor(sales_info$year), y=sales_info$n))+
+  geom_bar(stat = "identity", fill="#7f8bb9") +
+  geom_text(aes(label= sales_info$n, vjust = 1.5), color = "white", show.legend = F)+
+  xlab("Year")+
+  ylab("Count of Sales")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+Although the total sales (in quantity) has increased each year, the average sales amount per year has shrunk as well as the maximum sales - with 2011 enjoying the highest in all but the median sales prices.This would seem to indicate that although sales volume has gone up, the cost of items sold are cheaper at the individual level. Individual product pricing can only be derived from this data set as cost per item is not strictly recorded. 
+
+The data is positively skewed with the median sales falling well below the mean sales amounts. 
+
+Breaking it down by average annual sales by month, we see some outliers in the data that deserve some additional investigation:
+
+```{r}
+monthly_sales <- sales %>% 
+  mutate(order_year= year(Order.Date), 
+         month_year = as.Date(paste(2020,month(Order.Date), order_year, sep = "-"))) %>% 
+  ggplot(aes(x = month_year, y = Sales)) +
+  geom_point(color = "#7f8bb9") +
+  labs(x = "Month",
+       y = " Sales", 
+       title = "Annual SuperStore Sales by Month") +
+  geom_smooth(method = lm, se= F)+
+  geom_line() +
+  scale_x_date(date_breaks = "1 month",
+               labels = scales::date_format("%b")) +
+  facet_wrap(~ order_year) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5,
+                                   hjust = 1))
+
+monthly_sales
+
+```
+
+Let's look at a few of the ouliers to see if we can determine what is causing them. 
+
+```{r}
+kable(sales %>% 
+  group_by(year) %>% arrange(year) %>%
+  select(., c(Order.Date, Customer.Name, Segment, Product.Name, Sales,   Quantity, Discount, Profit)) %>%
+    filter(Sales == max(Sales)),format = "html", digits = 2, table.attr = "style='width:40%;'") %>% 
+  kable_styling(full_width = F, font_size = 12)
+
+```
+
+Looking at the table, it almost appears as if the `Segment` might be misclassified or taxinomically is not as representative of the customer-type, but instead represents the way the seller classifies the segment. For example, according to the data, Sean Miller purchased 6 videoconference units under the `Home Office` segment for a total sales price of `$22,638.48`. That seems curious as for most home offices usually one unit is only purchased. The same could be said for each of max sales found in 2012 and 2014. The expectation would be that the segments would represent `Corporate` as in 2013, rather than `Consumer`. With this in mind, we will use segment sparingly in the code and rely more heavily on `Categories` and `Sub-categories` as filters for our data.  
+
+```{r}
+
+monthly_sales <- sales %>%
+  group_by(YearMonth) %>%
+  summarize(
+    MonthlySales = sum(Sales)
+  ) %>%
+  arrange(YearMonth)
+
+monthly_sales
+```
+
+```{r}
+monthly_report<- monthly_sales %>%
+  mutate(
+    MoM = round((MonthlySales - lag(MonthlySales))/ lag(MonthlySales)*100, 1),
+    YoY = round((MonthlySales - lag(MonthlySales))/ lag(MonthlySales, 12)*100, 1)
+  )
+monthly_report
+```
+
+```{r}
+monthly_sales_by_category <- sales %>%
+  group_by(YearMonth, Category) %>%
+  summarize(
+    MonthlySales = sum(Sales)
+  ) %>%
+  arrange(YearMonth, Category)
+
+
+monthly_sales_by_category
+```
+
+```{r}
+monthly_report_by_category<- monthly_sales_by_category %>%
+  group_by(Category) %>%
+  mutate(
+    MoM = round((MonthlySales - lag(MonthlySales))/ lag(MonthlySales)*100, 1),
+    YoY = round((MonthlySales - lag(MonthlySales))/ lag(MonthlySales, 12)*100, 1)
+  )
+
+ggplot(monthly_report_by_category, aes(x= YearMonth, y=MoM, fill=Category)) +
+  geom_col(position = "dodge")
+```
+
+```{r}
+MSP_Sales <- MSP %>% filter(variable=="Profit") 
+ggplot(MSP_Sales) +
+  geom_col(aes(x = month, y = pct_change, fill = pct_change > 0)) +
+  scale_color_manual(values = c("#96be25", "#2596be"))+
+  labs(title = "Monthly Percent Change in Profits by Year", y=NULL)+
+  theme_classic()
+#+
+  #geom_text(aes(x = month, y = pct_change, label = paste0(round(pct_change, 2),"%")), size = 2, vjust= -0.5)
+
+  
+```
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
