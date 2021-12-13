@@ -7,8 +7,9 @@ This repository was created for the INFO 659 course at Drexel University, Introd
 
 ## File Manifest: 
 
-- `SuperstoreSalesPredictor.Rmd` - Main R code that predicts sales.
 - `SuperstoreSalesPredictor.ipynb` - Main Python code that predicts sales.
+- `SuperStoreSalesinR.Rmd` - Main R code that predicts sales.
+- `SuperStoreSalesinR.html` - Main R code HTML output.
 - `Folder /data` - Contains all data files
     - `superstore_dataset2011-2015.csv` - Raw sales data (source in **Project Overview**)
     - `train.csv` - Monthly total sales data from January 2011 - December 2013.  Used for training.
